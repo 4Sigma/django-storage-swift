@@ -164,6 +164,8 @@ class SwiftStorage(Storage):
     full_listing = setting('SWIFT_FULL_LISTING', True)
     max_retries = setting('SWIFT_MAX_RETRIES', 5)
     cache_headers = setting('SWIFT_CACHE_HEADERS', False)
+    hard_cache = setting('SWIFT_CACHE_HARD', False)
+    hard_cache_file_list = None
 
     def __init__(self, **settings):
         # check if some of the settings provided as class attributes
@@ -251,6 +253,30 @@ class SwiftStorage(Storage):
                 self._base_url = self.override_base_url
         return self._base_url
 
+    def build_hard_cache(self):
+        if(self.hard_cache and self.hard_cache_file_list == None):
+            # Build cache if never built
+            data = self.swift_conn.get_container(self.container_name, prefix=self.name_prefix,
+                                                    full_listing=self.full_listing)
+
+            final_dict = {}
+            for el in data[1]:
+                dt_s = el['last_modified']
+                name = el['name']
+                utc_time_modified = datetime.strptime(dt_s, "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=pytz.utc)
+                hash = el['hash']
+
+                if not settings.USE_TZ:
+                    # Fix timezone with collect static storage class
+                    utc_timestamp = utc_time_modified.timestamp()
+                    last_modified = datetime.fromtimestamp(utc_timestamp)
+                else:
+                    last_modified = utc_time_modified
+
+                final_dict[name] = {'last_modified': last_modified, 'hash': hash }
+
+            self.hard_cache_file_list = final_dict
+
     def _open(self, name, mode='rb'):
         original_name = name
         name = self.name_prefix + name
@@ -331,6 +357,14 @@ class SwiftStorage(Storage):
 
     @prepend_name_prefix
     def exists(self, name):
+        if(self.hard_cache):
+            self.build_hard_cache()
+            try:
+                self.hard_cache_file_list[name]
+            except KeyError:
+                return False
+            return True
+
         try:
             self.get_headers(name)
         except swiftclient.ClientException:
@@ -442,15 +476,13 @@ class SwiftStorage(Storage):
 
     @prepend_name_prefix
     def get_modified_time(self, name):
-        data_str = self.get_headers(name)['last-modified']
-        date_timezone = parse_swift_datetime(data_str)
-
-        if settings.USE_TZ:
-            logger.debug("aware")
-            return date_timezone
+        # Handle case when a cache ready
+        if(self.hard_cache):
+            date_timezone = self.hard_cache_file_list[name]['last_modified']
         else:
-            logger.debug("naive")
-            return make_naive(date_timezone)
+            data_str = self.get_headers(name)['last-modified']
+            date_timezone = parse_swift_datetime(data_str)
+        return date_timezone
 
 class StaticSwiftStorage(SwiftStorage):
     container_name = setting('SWIFT_STATIC_CONTAINER_NAME', '')
