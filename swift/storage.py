@@ -12,6 +12,8 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.files import File
 from django.core.files.storage import Storage
 from six.moves.urllib import parse as urlparse
+from django.utils.timezone import make_naive
+import pytz
 
 try:
     from django.utils.deconstruct import deconstructible
@@ -29,6 +31,10 @@ except ImportError:
 def setting(name, default=None):
     return getattr(settings, name, default)
 
+def parse_swift_datetime(data_str):
+    # Check out format over inside swift source
+    tmp = datetime.strptime(data_str, "%a, %d %b %Y %H:%M:%S GMT")
+    return tmp.replace(tz=pytz.GMT)
 
 def validate_settings(backend):
     # Check mandatory parameters
@@ -366,11 +372,6 @@ class SwiftStorage(Storage):
         return int(self.get_headers(name)['content-length'])
 
     @prepend_name_prefix
-    def modified_time(self, name):
-        return datetime.fromtimestamp(
-            float(self.get_headers(name)['x-timestamp']))
-
-    @prepend_name_prefix
     def url(self, name):
         return self._path(name)
 
@@ -428,7 +429,28 @@ class SwiftStorage(Storage):
             if obj['name'].startswith(abs_path):
                 self.swift_conn.delete_object(self.container_name,
                                               obj['name'])
+    @prepend_name_prefix
+    def get_accessed_time(self, name):
+        # Swift does not get this info, left NotImplemented
+        raise NotImplementedError('subclasses of Storage must provide a get_accessed_time() method')
 
+    @prepend_name_prefix
+    def get_created_time(self, name):
+        logger.debug("get_reated_time")
+        return datetime.fromtimestamp(
+            float(self.get_headers(name)['x-timestamp']))
+
+    @prepend_name_prefix
+    def get_modified_time(self, name):
+        data_str = self.get_headers(name)['last-modified']
+        date_timezone = parse_swift_datetime(data_str)
+
+        if settings.USE_TZ:
+            logger.debug("aware")
+            return date_timezone
+        else:
+            logger.debug("naive")
+            return make_naive(date_timezone)
 
 class StaticSwiftStorage(SwiftStorage):
     container_name = setting('SWIFT_STATIC_CONTAINER_NAME', '')
