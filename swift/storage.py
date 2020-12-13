@@ -12,7 +12,6 @@ from django.core.exceptions import ImproperlyConfigured
 from django.core.files import File
 from django.core.files.storage import Storage
 from six.moves.urllib import parse as urlparse
-from django.utils.timezone import make_naive
 import pytz
 
 try:
@@ -34,7 +33,11 @@ def setting(name, default=None):
 def parse_swift_datetime(data_str):
     # Check out format over inside swift source
     tmp = datetime.strptime(data_str, "%a, %d %b %Y %H:%M:%S GMT")
-    return tmp.replace(tz=pytz.GMT)
+
+    if settings.USE_TZ:
+        return tmp.replace(tzinfo=pytz.utc)
+    else:
+        return tmp
 
 def validate_settings(backend):
     # Check mandatory parameters
@@ -390,9 +393,6 @@ class SwiftStorage(Storage):
             url = urlparse.urljoin(self.base_url, tmp_path)
 
         return url
-
-    def path(self, name):
-        raise NotImplementedError
 
     @prepend_name_prefix
     def isdir(self, name):
